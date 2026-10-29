@@ -9,3 +9,4 @@ data/pilot_claude.csv
 data/check_blind.csv
 data/eval_to_label.csv
 data/dev_claude.csv
+.gitnexus

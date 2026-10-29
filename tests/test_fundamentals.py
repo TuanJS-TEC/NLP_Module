@@ -42,3 +42,27 @@ def test_annual_wide_pivots_items_and_dates_availability_after_audit_deadline():
     w = annual_wide(long).set_index("symbol")
     assert w.loc["FPT", "is_doanh_so_thuan"] == 6.3e13 and pd.isna(w.loc["VCB", "is_doanh_so_thuan"])
     assert (w["available_at"] == pd.Timestamp("2025-04-01")).all()     # FY2024 unknown until after Q1 2025
+
+
+def test_profit_change_prefers_consolidated_over_separate():
+    # PLX FY2025 / HSG Q1 FY2025-26: separate stated first, consolidated later and with the opposite sign
+    assert profit_change("a/ Theo báo cáo tài chính riêng: Lợi nhuận sau thuế TNDN năm 2025 đạt 1.903,8 tỷ đồng, "
+                         "tăng 231,4 tỷ đồng (13,8%) so với năm 2024. b/ Theo báo cáo tài chính hợp nhất: Lợi nhuận "
+                         "sau thuế năm 2025 biến động giảm 4%") == approx(-0.04)
+    assert profit_change("lợi nhuận sau thuế riêng Công ty mẹ đạt 43,2 tỷ đồng, tăng 37,2 tỷ đồng, tương ứng tăng 615%. "
+                         "Trong Quý I, lợi nhuận sau thuế hợp nhất đạt 62,4 tỷ đồng, giảm 103 tỷ đồng, tương ứng "
+                         "giảm 62%") == approx(-0.62)
+
+
+def test_bctc_features_and_availability(tmp_path):
+    from nlp_module.fundamentals import add_bctc, bctc_features
+    rows = [("AAA", y, code, v) for y, np_, eq, ta in ((2023, -50.0, 500.0, 1000.0), (2024, 100.0, 400.0, 1000.0))
+            for code, v in (("is_lai_lo_thuan_sau_thue", np_), ("bs_von_chu_so_huu_4d280b22", eq), ("bs_tong_tai_san", ta))]
+    pd.DataFrame(rows, columns=["ticker", "year", "item_code", "value"]).to_parquet(tmp_path / "b.parquet")
+    f = bctc_features(tmp_path / "b.parquet")
+    r = f[f.available_at == pd.Timestamp("2025-04-01")].iloc[0]
+    assert r.bc_np_yoy == approx(2.0) and r.bc_roe == approx(0.25) and r.bc_lev == approx(0.6)   # -50 -> 100: +300%, clipped
+    days = pd.to_datetime(["2025-03-31", "2025-04-01", "2026-06-01"]) + pd.Timedelta(hours=7)
+    got = add_bctc(pd.DataFrame({"date": days, "symbol": "AAA"}), f)
+    # FY2023 has no prior year -> no growth -> imputed; FY2024 from 2025-04-01; stale after ~13 months
+    assert list(got.has_bctc) == [0.0, 1.0, 0.0] and list(got.bc_lev) == [0.0, 0.6, 0.0]

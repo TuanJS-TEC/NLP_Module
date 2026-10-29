@@ -130,6 +130,8 @@ def main(argv=None):
                     help="cross-sectional rank: none = raw levels (drifts), counts = news_count_*, all = + sentiment_mean_*")
     ap.add_argument("--fund", action="store_true",
                     help="add HOSE earnings-change features (fundamentals.FUND): price+fund, price+text+fund")
+    ap.add_argument("--bctc", action="store_true",
+                    help="add annual audited-statement features (fundamentals.BCTC): price+bctc, price+text+bctc")
     a = ap.parse_args(argv)
 
     df = load_prices(a.prices)
@@ -143,6 +145,10 @@ def main(argv=None):
     if a.fund:
         d = fundamentals.add_fund(d, fundamentals.load(c))
         print("has_fund share: all %.3f, test %.3f" % (d.has_fund.mean(), d[d.date >= a.test_start].has_fund.mean()))
+    if a.bctc:
+        d = fundamentals.add_bctc(d, fundamentals.bctc_features())
+        print("has_bctc share: all %.3f, test %.3f" % (d.has_bctc.mean(), d[d.date >= a.test_start].has_bctc.mean()))
+    extras = {k: v for k, v in (("fund", fundamentals.FUND), ("bctc", fundamentals.BCTC)) if getattr(a, k)}
     cols = {"none": [], "counts": COUNTS, "all": COUNTS + SENT}[a.rank]
     if cols:
         print("drift (mean before / from test_start), raw:", drift(d, cols, a.test_start))
@@ -157,9 +163,9 @@ def main(argv=None):
                      "n_train": pr["n_train"], "n_test": pr["n_test"],
                      "auc_price": pr["auc"], "auc_price_text": tx["auc"],
                      "diff": tx["auc"] - pr["auc"], "ci_lo": lo, "ci_hi": hi})
-        if a.fund:
-            for name, use_text in (("fund", False), ("text_fund", True)):
-                r = run(d, h, use_text=use_text, extra=fundamentals.FUND, **kw)
+        for g, extra in extras.items():
+            for name, use_text in ((g, False), (f"text_{g}", True)):
+                r = run(d, h, use_text=use_text, extra=extra, **kw)
                 lo, hi = diff_ci(r["test"], pr["test"], a.boot)
                 rows[-1] |= {f"auc_price_{name}": r["auc"], f"diff_{name}": r["auc"] - pr["auc"],
                              f"ci_lo_{name}": lo, f"ci_hi_{name}": hi}
