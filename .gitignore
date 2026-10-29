@@ -1,0 +1,11 @@
+.venv/
+data/raw/
+data/nlp.db
+data/models/
+data/vncorenlp/
+data/*.parquet
+__pycache__/
+data/pilot_claude.csv
+data/check_blind.csv
+data/eval_to_label.csv
+data/dev_claude.csv

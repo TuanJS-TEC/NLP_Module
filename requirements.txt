@@ -1,0 +1,10 @@
+selectolax>=1.0
+scikit-learn
+pandas
+pyarrow
+joblib
+torch
+transformers
+accelerate
+pytest
+vnfinancialdata
