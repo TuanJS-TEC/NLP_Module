@@ -1,4 +1,5 @@
-"""Volatility forecaster over OHLCV: bar loading (history CSVs + live board quotes) and price-only features.
+"""Volatility forecaster over OHLCV: bar loading (history CSVs + live board quotes), price features and the annual
+audited-statement features (fundamentals.BCTC; needs data/bctc.parquet, see README).
 Prices are in thousand VND throughout (live quotes are VND, divided by 1000 on the way in)."""
 import argparse
 import glob
@@ -14,13 +15,13 @@ from sklearn.linear_model import LogisticRegression
 from sklearn.pipeline import make_pipeline
 from sklearn.preprocessing import StandardScaler
 
-from . import storage
+from . import fundamentals, storage
 from . import trial_forecast as tf
 from .trial_forecast import CLOSE_UTC
 from .walk_forward import FOLDS, _split
 
-FEATS = ["ret1", "ret5", "ret20", "vol10", "vol20", "ma20", "range", "vz", "mret1", "mret5"]
-VERSION = "volcast-v1"
+FEATS = ["ret1", "ret5", "ret20", "vol10", "vol20", "ma20", "range", "vz", "mret1", "mret5"] + fundamentals.BCTC
+VERSION = "volcast-v2"   # v1 = price only; v2 adds BCTC (higher validation coverage at 0.65 in 5 of 6 fold x h)
 BUNDLE = "data/models/volcast.joblib"
 REPORT = "data/volcast_report.json"
 HORIZONS = (2, 5)
@@ -63,8 +64,9 @@ def bars(c, stock_dir="data/stock"):
     return df.sort_values(["symbol", "date"]).reset_index(drop=True)
 
 
-def add_features(df):
-    """Backward-looking only. Warm-up rows (first ~20 sessions per symbol) keep NaN features; callers drop them."""
+def add_features(df, bctc=None):
+    """Backward-looking only. Warm-up rows (first ~20 sessions per symbol) keep NaN features; callers drop them.
+    bctc: fundamentals.bctc_features() output, loaded from data/bctc.parquet when None."""
     df = df.sort_values(["symbol", "date"]).reset_index(drop=True)
     g = df.groupby("symbol")
     df["ret1"], df["ret5"], df["ret20"] = g.close.pct_change(1), g.close.pct_change(5), g.close.pct_change(20)
@@ -75,7 +77,7 @@ def add_features(df):
     df["vz"] = np.log1p(df.volume) - g.volume.transform(lambda x: np.log1p(x).rolling(20).mean())
     df["mret1"] = df.groupby("date").ret1.transform("mean")
     df["mret5"] = df.groupby("date").ret5.transform("mean")
-    return df
+    return fundamentals.add_bctc(df, fundamentals.bctc_features() if bctc is None else bctc)
 
 
 MODELS = {"logit": lambda: make_pipeline(StandardScaler(), LogisticRegression(C=0.1, max_iter=2000)),

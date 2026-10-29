@@ -1,7 +1,10 @@
 import numpy as np
 import pandas as pd
 
-from nlp_module import storage, volcast
+from nlp_module import fundamentals, storage, volcast
+
+NO_BCTC = pd.DataFrame(columns=["symbol", "available_at"] + fundamentals.BCTC[1:]).astype(
+    {"symbol": str, "available_at": "datetime64[ns]"} | {k: float for k in fundamentals.BCTC[1:]})
 
 
 def _bars(n=60):
@@ -17,11 +20,11 @@ def _bars(n=60):
 
 def test_features_do_not_see_the_future():
     df = _bars()
-    before = volcast.add_features(df)
+    before = volcast.add_features(df, NO_BCTC)
     cut = df.groupby("symbol").cumcount() > 40
     df2 = df.copy()
     df2.loc[cut, "close"] *= 1.7
-    after = volcast.add_features(df2)
+    after = volcast.add_features(df2, NO_BCTC)
     keep = (df.groupby("symbol").cumcount() <= 40).to_numpy()
     pd.testing.assert_frame_equal(before.loc[keep, volcast.FEATS], after.loc[keep, volcast.FEATS])
 
@@ -76,7 +79,7 @@ def test_walk_reports_none_when_unreachable():
     df = pd.concat(pd.DataFrame({"date": d, "symbol": s, "close": 20 * np.exp(np.cumsum(rng.normal(0, 0.02, len(d)))),
                                  "volume": rng.integers(1e5, 1e6, len(d)).astype(float)}) for s in "ABCD")
     df = df.assign(high=df.close * 1.01, low=df.close * 0.99).reset_index(drop=True)
-    out = volcast.walk(volcast.add_features(df), 2)
+    out = volcast.walk(volcast.add_features(df, NO_BCTC), 2)
     assert [r["fold"] for r in out] == ["A", "B", "C"]
     for r in out:
         if r["model"] is None:
@@ -97,7 +100,7 @@ def _live_df():
     df = _bars(60)
     df["date"] = df.groupby("symbol").date.transform(lambda s: pd.bdate_range(end="2026-10-28", periods=len(s)))
     df = df[~((df.symbol == "BBB") & (df.date == "2026-10-28"))]   # BBB stops a day early
-    return volcast.add_features(df)
+    return volcast.add_features(df, NO_BCTC)
 
 
 def test_predict_latest_uses_each_symbols_own_last_day():
@@ -155,7 +158,7 @@ def test_walk_rows_carry_rule_ci():
     df = pd.concat(pd.DataFrame({"date": d, "symbol": s, "close": 20 * np.exp(np.cumsum(rng.normal(0, 0.02, len(d)))),
                                  "volume": rng.integers(1e5, 1e6, len(d)).astype(float)}) for s in "ABCD")
     df = df.assign(high=df.close * 1.01, low=df.close * 0.99).reset_index(drop=True)
-    for r in volcast.walk(volcast.add_features(df), 2):
+    for r in volcast.walk(volcast.add_features(df, NO_BCTC), 2):
         assert "rule_ci_lo" in r and "rule_ci_hi" in r
         if r["model"]:
             assert r["rule_ci_lo"] <= r["rule_acc"] <= r["rule_ci_hi"]

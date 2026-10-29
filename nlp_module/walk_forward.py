@@ -59,14 +59,14 @@ def _split(d, h, train_start, val_start, test_start, test_end):
             d[d.date.isin(dates[i0:it - h])], d[(d.date >= dates[it]) & (d.date < pd.Timestamp(test_end))])
 
 
-def forecast_fold(ds, h, train_start, val_start, test_start, test_end, fund=False):
+def forecast_fold(ds, h, train_start, val_start, test_start, test_end, extras=None):
     """Feature set, cross-sectional rank mode and C are ALL chosen on validation; test is scored once.
     ds maps rank mode -> dataframe. Rank mode is meaningless without text features, so price-only uses 'none'.
-    fund adds price+fund and price+text+fund (keys 'fund', 'text+fund/<rank>'); ds must then carry FUND columns."""
+    extras {name: cols} adds price+name and price+text+name (keys 'fund', 'text+fund/<rank>'); ds must carry cols."""
     res, n = {}, None
     sets = [("price", PRICE), ("text", PRICE + tf.TEXT)]
-    if fund:
-        sets += [("fund", PRICE + fundamentals.FUND), ("text+fund", PRICE + tf.TEXT + fundamentals.FUND)]
+    for g, cols in (extras or {}).items():
+        sets += [(g, PRICE + cols), (f"text+{g}", PRICE + tf.TEXT + cols)]
     for fs, cols in sets:
         for rk in (RANK_COLS if fs.startswith("text") else ("none",)):
             tr, va, trva, te = _split(ds[rk], h, train_start, val_start, test_start, test_end)
@@ -85,12 +85,14 @@ def main(argv=None):
     ap.add_argument("--skip-nlp", action="store_true", help="reuse phobert-fold* results already in the DB")
     ap.add_argument("--target", default="direction", choices=["direction", "excess", "absmove"])
     ap.add_argument("--fund", action="store_true", help="add HOSE earnings-change features to the val search")
+    ap.add_argument("--bctc", action="store_true", help="add annual audited-statement features to the val search")
     a = ap.parse_args(argv)
     c = storage.connect()
     prices = tf.load_prices(a.prices)
     for h in (2, 5):
         prices = tf.add_targets(prices, h, a.target)
     prices = prices[prices.date >= "2021-10-21"]   # first collected news day
+    extras = {k: v for k, v in (("fund", fundamentals.FUND), ("bctc", fundamentals.BCTC)) if getattr(a, k)}
     rows = []
     for name, t0, v0, s0, e0 in FOLDS:
         version = f"phobert-fold{name}" if a.skip_nlp else nlp_model(c, name, v0, s0)
@@ -99,15 +101,17 @@ def main(argv=None):
                       for s, g in prices.groupby("symbol"))
         if a.fund:
             d = fundamentals.add_fund(d, fundamentals.load(c))
+        if a.bctc:
+            d = fundamentals.add_bctc(d, fundamentals.bctc_features())
         ds = {rk: (tf.rank_cs(d, cols) if cols else d) for rk, cols in RANK_COLS.items()}
         for h in (2, 5):
-            r, pick, ntr, nva, nte = forecast_fold(ds, h, t0, v0, s0, e0, a.fund)
+            r, pick, ntr, nva, nte = forecast_fold(ds, h, t0, v0, s0, e0, extras)
             best = max((k for k in r if k.startswith("text/")), key=lambda k: r[k]["val_auc"])
             rows.append({"fold": name, "target": a.target, "h": h, "n_train": ntr, "n_val": nva, "n_test": nte,
                          "price_val": r["price"]["val_auc"], "price_test": r["price"]["test_auc"],
                          "text_best": best, "text_val": r[best]["val_auc"], "text_test": r[best]["test_auc"],
                          "picked": pick, "picked_test": r[pick]["test_auc"]}
-                        | ({"fund_val": r["fund"]["val_auc"], "fund_test": r["fund"]["test_auc"]} if a.fund else {}))
+                        | {f"{g}_{k}": r[g][f"{k}_auc"] for g in extras for k in ("val", "test")})
             print({k: (round(v, 3) if isinstance(v, float) else v) for k, v in rows[-1].items()})
     out = pd.DataFrame(rows).round(3)
     print(out.to_string(index=False))

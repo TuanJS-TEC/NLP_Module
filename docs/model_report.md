@@ -422,63 +422,104 @@ time, so there is no publication-lag assumption.
   TCBS API (Cloudflare challenge); Vietcap API (needs spoofed browser headers, which breaks source rule 1); CafeF
   BCTC pages (bank statements carry non-bank row labels, and cells shift between columns).
 - Coverage: the HOSE API serves listings only from **~2025-04**. Backfill gave 81 filings for tracked tickers,
-  2025-05-05 .. 2026-10-22. 46 state an LNST %; the rest give only amounts or narrative and are dropped. Filings exist
+  2025-05-05 .. 2026-10-22. 48 state an LNST %; the rest give only amounts or narrative and are dropped. Filings exist
   only for >= 10% swings. Of the 10 price tickers, VCB and STB have no parsed filing; STB files amounts only.
   `has_fund` share is 0.109 of all forecaster rows and 0.461 of rows from 2025-09-17.
 
 | target | h | AUC price | price+fund | diff [95% CI] | price+text+fund |
 |---|---|---|---|---|---|
-| direction | 2 | 0.519 | 0.522 | +0.003 [-0.028, +0.036] | 0.519 |
-| direction | 5 | 0.546 | 0.565 | +0.018 [-0.008, +0.045] | 0.560 |
-| excess | 2 | 0.532 | 0.538 | +0.006 [-0.019, +0.030] | 0.526 |
-| excess | 5 | 0.533 | 0.542 | +0.009 [-0.017, +0.036] | 0.541 |
-| absmove | 2 | 0.573 | 0.535 | **-0.038** [-0.061, -0.017] | 0.532 |
-| absmove | 5 | 0.581 | 0.520 | **-0.061** [-0.082, -0.039] | 0.521 |
+| direction | 2 | 0.519 | 0.527 | +0.008 [-0.023, +0.042] | 0.523 |
+| direction | 5 | 0.546 | 0.549 | +0.003 [-0.022, +0.028] | 0.542 |
+| excess | 2 | 0.532 | 0.523 | -0.009 [-0.033, +0.015] | 0.515 |
+| excess | 5 | 0.533 | 0.543 | +0.010 [-0.017, +0.036] | 0.537 |
+| absmove | 2 | 0.573 | 0.563 | -0.009 [-0.029, +0.009] | 0.561 |
+| absmove | 5 | 0.581 | 0.475 | **-0.107** [-0.130, -0.083] | 0.475 |
 
 (`trial_forecast --fund`, baseline NLP model, test from 2025-09-17.) Walk-forward (`--skip-nlp --fund`): in folds A
 and B, price+fund equals price-only, because the training windows contain no filings. In fold C, validation never
-picks price+fund (val 0.512 / 0.518 vs price 0.518 / 0.518 at h=2/5).
+picks price+fund (val 0.512 / 0.510 vs price 0.518 / 0.518 at h=2/5).
 
-**Reading:** there is no measurable gain. Direction/excess point estimates are slightly positive, but every CI
-crosses 0. On absmove the result is significantly *worse*: the model learns `fund_age`/`has_fund` from only ~4
+**Reading:** there is no measurable gain. Direction/excess point estimates sit around 0, and every CI crosses 0. On
+absmove h=5 the result is significantly *worse* (AUC below 0.5): the model learns `fund_age`/`has_fund` from only ~4
 months of training rows that have filings, and that does not transfer. The fault is the data window, not the feature
 definition. A fair test needs history before 2025, which means a different source for the timestamps (the HOSE API
 does not serve it) or a user-supplied BCTC file. Until then, keep `--fund` off in any forecaster that ships.
 
-## Volatility forecast (volcast-v1, 2026-10-28)
+**Parser fix, rerun 2026-10-29.** The table above uses the fixed parser. `python -m nlp_module.fundamentals --check`
+compares the parsed full-year % with audited consolidated statements from `vnfinancialdata` (public HF dataset, annual
+only, 2009-2025). The old parser took the *first* LNST mention. Many filings state the separate (parent-only) figure
+first, so FY2025 matched only 2 of 10: PLX +13.8% vs -4% audited (wrong sign), VRE +928% vs +57%. `profit_change` now
+prefers the consolidated mention: 7 of 10 within 0.5 pp. The misses are HPG and POW (no consolidated % in the text) and
+STB (amounts only). The fix changed 21 of 84 filings' values; the 4 sign flips (PLX, POW, VIC, HSG half-year/quarter)
+were read by hand and the new value is the consolidated one in each case. Pre-fix table: direction +0.003/+0.018,
+excess +0.006/+0.009, absmove -0.038/-0.061 (h=2/5). The conclusion is unchanged: no gain; keep `--fund` off.
+
+## Annual audited-statement features (BCTC, 2026-10-29)
+`fundamentals.BCTC = has_bctc, bc_np_yoy, bc_roe, bc_lev, bc_size` (after-tax-profit growth vs the prior year, ROE,
+1 - equity/assets, log total assets), from `data/bctc.parquet` (`vnfinancialdata`, public HF dataset, annual only,
+FY2019-2025). The dataset has no publication dates, so fiscal year Y is used from **April 1 of Y+1** (audited
+statements are due 90 days after Dec 31), and is dropped after ~13 months. Unlike the HOSE filings, this covers the
+whole training window. SSI is not in the dataset (imputed: has_bctc 0, bc_* 0).
+
+Direction/excess forecaster (`trial_forecast --bctc`, test from 2025-09-17; diff = AUC(price+bctc) - AUC(price)):
+
+| target | h | AUC price | price+bctc | diff [95% CI] | price+text+bctc |
+|---|---|---|---|---|---|
+| direction | 2 | 0.519 | 0.528 | +0.010 [-0.006, +0.025] | 0.520 |
+| direction | 5 | 0.546 | 0.563 | +0.016 [-0.000, +0.032] | 0.545 |
+| excess | 2 | 0.532 | 0.503 | **-0.030** [-0.047, -0.012] | 0.493 |
+| excess | 5 | 0.533 | 0.509 | **-0.024** [-0.045, -0.001] | 0.496 |
+| absmove | 2 | 0.573 | 0.573 | -0.000 [-0.017, +0.016] | 0.565 |
+| absmove | 5 | 0.581 | 0.585 | +0.004 [-0.016, +0.023] | 0.583 |
+
+Walk-forward (`--skip-nlp --bctc`), test AUC price vs price+bctc: direction 0.513/0.511, 0.539/0.553, 0.502/0.507,
+0.487/0.503, 0.524/0.537, 0.585/0.571 (A2, A5, B2, B5, C2, C5); validation picked bctc in A2 and C5, and both picks
+scored below price on test. absmove 0.528/0.536, 0.572/0.587, 0.575/0.593, 0.607/0.596, 0.533/0.532, 0.504/0.541.
+**Reading:** no usable signal for direction, and excess is significantly *worse*. Beating the market is a
+cross-sectional target, and with 10 tickers near-constant per-ticker features let the model memorise tickers. Magnitude
+(absmove) leans positive in walk-forward (4 of 6 higher), which is the known size/leverage-volatility link. It is used
+only in volcast (next section). Text features add nothing on top of BCTC in any row.
+
+## Volatility forecast (volcast-v2 with BCTC, 2026-10-29; v1 price-only 2026-10-28)
 `nlp_module/volcast.py` predicts **volatility magnitude**, not direction. Target `absmove` is whether |close t→t+h return|
-beats the cross-sectional median of the 15 tickers in `data/stock/`, for h = 2 and h = 5 sessions. Features are
-price/volume only (`volcast.FEATS`: ret1, ret5, ret20, vol10, vol20, ma20, range, vz, mret1, mret5). Text and earnings
-features are not used, because the spike showed no gain.
+beats the cross-sectional median of the 15 tickers in `data/stock/`, for h = 2 and h = 5 sessions. Features:
+price/volume (ret1, ret5, ret20, vol10, vol20, ma20, range, vz, mret1, mret5) plus `fundamentals.BCTC` since v2.
+Text and HOSE earnings-filing features are not used (no gain, sections above).
 
 The forecast is confidence-gated. Per fold, the threshold is the widest coverage whose validation accuracy is >= 0.65
 with >= 50 calls. The model (logit, or gbm = HistGradientBoosting) is chosen on validation. Evaluation is walk-forward over folds A, B, C
 (`walk_forward.FOLDS`), and each test window is scored once. The baseline `rule_acc` uses no model: it calls the highest
 (or lowest) cross-sectional vol10 rank (centred ordinal rank, so top and bottom are symmetric), with the same number of
 calls but scored on its own rows. Because the threshold is the widest coverage at which validation only just reaches 0.65,
-test accuracy is expected to land below 0.65 on average. Numbers below are from `data/volcast_report.json` (created_at 2026-10-28T02:59:38Z).
+test accuracy is expected to land below 0.65 on average. Numbers below are from `data/volcast_report.json` (v2, 2026-10-29);
+v1's are in `data/volcast_report-v1.json`, and its bundle is kept as `data/models/volcast-v1.joblib`.
 
-| fold | h | model | threshold | val_acc | test_acc | test_cov | test_n | CI 95% | rule_acc | rule CI 95% |
+| fold | h | model | threshold | val_cov v1 → v2 | test_acc v1 → v2 | test_cov v1 → v2 | test_n v2 | CI 95% v2 | rule_acc v2 | rule CI 95% v2 |
 |---|---|---|---|---|---|---|---|---|---|---|
-| A | 2 | gbm | 0.234 | 0.652 | 0.623 | 3.9% | 77 | [0.512, 0.723] | 0.688 | [0.578, 0.781] |
-| B | 2 | gbm | 0.100 | 0.654 | 0.663 | 15.8% | 309 | [0.609, 0.714] | 0.673 | [0.619, 0.723] |
-| C | 2 | logit | 0.060 | 0.650 | 0.565 | 51.2% | 598 | [0.525, 0.604] | 0.545 | [0.505, 0.585] |
-| A | 5 | logit | 0.125 | 0.652 | 0.661 | 23.9% | 466 | [0.617, 0.702] | 0.631 | [0.586, 0.673] |
-| B | 5 | gbm | 0.120 | 0.651 | 0.733 | 8.5% | 165 | [0.661, 0.795] | 0.715 | [0.642, 0.779] |
-| C | 5 | logit | 0.048 | 0.650 | 0.555 | 63.8% | 717 | [0.519, 0.591] | 0.537 | [0.500, 0.573] |
+| A | 2 | logit | 0.116 | 3.7% → 25.8% | 0.623 → 0.614 | 3.9% → 32.7% | 637 | [0.575, 0.651] | 0.573 | [0.534, 0.611] |
+| B | 2 | gbm | 0.093 | 26.1% → 35.1% | 0.663 → 0.676 | 15.8% → 32.0% | 624 | [0.639, 0.712] | 0.644 | [0.606, 0.681] |
+| C | 2 | gbm | 0.057 | 44.2% → 48.4% | 0.565 → **0.625** | 51.2% → 44.7% | 523 | [0.583, 0.666] | 0.532 | [0.489, 0.574] |
+| A | 5 | gbm | 0.176 | 15.0% → 19.6% | 0.661 → 0.645 | 23.9% → 17.0% | 332 | [0.592, 0.694] | 0.648 | [0.595, 0.697] |
+| B | 5 | logit | 0.111 | 23.8% → 32.3% | 0.733 → 0.686 | 8.5% → 36.5% | 711 | [0.651, 0.719] | 0.662 | [0.627, 0.696] |
+| C | 5 | gbm | 0.082 | 55.6% → 44.2% | 0.555 → **0.604** | 63.8% → 51.0% | 573 | [0.563, 0.643] | 0.546 | [0.505, 0.587] |
 
-**Reading.** Three of six rows reach 0.65 on test: fold B at h=2 (0.663, cov 15.8%, n=309) and h=5 (0.733, cov 8.5%, n=165), and fold A at h=5 (0.661, cov 23.9%, n=466). Fold A at h=2 (0.623, cov 3.9%, n=77) does not, and neither does fold C at either horizon. **Fold C (2026-07 → now) is the fold whose model kind and threshold run live (the live model is refit on all labelled rows). It reaches only 0.565 at h=2 (cov 51.2%, n=598) and 0.555 at h=5 (cov 63.8%, n=717).** The validation-picked threshold did not transfer to the most recent window: validation accuracy was 0.650 at 44% (h=2) and 56% (h=5) coverage (validation call counts not recorded), and test accuracy fell well below the target. Do not read this table as the 0.65 target being met live.
-
-Against the baseline (rule_acc is the rule's accuracy on its own most-extreme rows, same number of calls as the model, not the model's calls), the model is **not** consistently better. The margin (model minus rule) is -0.065 (A, n=77), -0.010 (B, n=309) and +0.020 (C, n=598) at h=2, and +0.030 (A, n=466), +0.018 (B, n=165) and +0.018 (C, n=717) at h=5. At h=2 the model is below the rule in folds A and B. In every row the model's CI contains the rule's accuracy and the rule's CI contains the model's, and no paired test of the difference was run. Live fold C is the clearest case: model 0.565 [0.525, 0.604] against rule 0.545 [0.505, 0.585] at h=2, and 0.555 [0.519, 0.591] against 0.537 [0.500, 0.573] at h=5. The model's measured edge over a one-line volatility-rank rule is therefore not distinguishable from zero. Fold A at h=2 has
-n=77, so its CI [0.512, 0.723] is wide and covers both the rule value and the 0.65 target. Treat the small-n folds as
-indicative only.
+**Why v2.** Selection is on validation: at the same 0.65 validation accuracy, v2 covers more rows in 5 of 6 fold × h
+(C5 is the exception). On test, v2 trades accuracy for coverage in A and B (B5: 0.733 on 8.5% → 0.686 on 36.5%, i.e.
+121 → 488 correct calls). In the live fold C it is better on both horizons. **Fold C at h=2 is the first row where
+the model's CI clears the vol-rank rule's** (0.625 [0.583, 0.666] vs 0.532 [0.489, 0.574]). At h=5 the CIs still
+touch (0.604 [0.563, 0.643] vs 0.546 [0.505, 0.587]). Model minus rule: +0.041, +0.032, +0.093 at h=2 and -0.003,
++0.024, +0.058 at h=5 (A, B, C). The rule still matches the model in A5. Caveats: (1) the BCTC experiments were read on
+test before this choice, although the stated criterion is validation coverage; (2) with 15 tickers, BCTC values are
+nearly per-ticker constants, so part of the gain may be "this ticker is usually volatile", which is ex-ante knowledge
+but not news; (3) fold C still lands below 0.65 on test.
 
 **Limitations**
 - Live bars come from SSI, in VND /1000 and **not dividend-adjusted**. On ex-dividend days this produces a spurious
   return, which feeds ret1, vol10 and the other rolling features.
 - 2026-10-22 and 2026-10-23 are missing from both sources, so rolling windows span that gap for ~20 sessions.
 - SSI `volume` is normal-matched volume and may exclude put-through trades. This biases `vz` after the seam.
-- Text and earnings features are not used (the spike showed no gain).
+- Text and HOSE earnings-filing features are not used (no gain). BCTC values are annual and lag up to ~15 months.
+- `data/bctc.parquet` must exist (README); train and predict fail without it rather than silently impute.
 
 **How to run**
 ```
